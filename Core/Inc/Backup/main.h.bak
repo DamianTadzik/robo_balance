@@ -59,10 +59,13 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 #define BTN_OK_Pin GPIO_PIN_10
 #define BTN_OK_GPIO_Port GPIOA
+#define BTN_OK_EXTI_IRQn EXTI15_10_IRQn
 #define BTN_NO_Pin GPIO_PIN_11
 #define BTN_NO_GPIO_Port GPIOA
+#define BTN_NO_EXTI_IRQn EXTI15_10_IRQn
 #define BTN_LE_Pin GPIO_PIN_12
 #define BTN_LE_GPIO_Port GPIOA
+#define BTN_LE_EXTI_IRQn EXTI15_10_IRQn
 #define SWDIO_Pin GPIO_PIN_13
 #define SWDIO_GPIO_Port GPIOA
 #define SWCLK_Pin GPIO_PIN_14
@@ -71,6 +74,7 @@ void Error_Handler(void);
 #define LD3_GPIO_Port GPIOB
 #define BTN_RI_Pin GPIO_PIN_5
 #define BTN_RI_GPIO_Port GPIOB
+#define BTN_RI_EXTI_IRQn EXTI9_5_IRQn
 /* USER CODE BEGIN Private defines */
 
 /* USER CODE END Private defines */
