@@ -57,14 +57,6 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define DIR_L_2_Pin GPIO_PIN_4
-#define DIR_L_2_GPIO_Port GPIOA
-#define DIR_L_1_Pin GPIO_PIN_5
-#define DIR_L_1_GPIO_Port GPIOA
-#define DIR_R_1_Pin GPIO_PIN_6
-#define DIR_R_1_GPIO_Port GPIOA
-#define DIR_R_2_Pin GPIO_PIN_7
-#define DIR_R_2_GPIO_Port GPIOA
 #define BTN_OK_Pin GPIO_PIN_10
 #define BTN_OK_GPIO_Port GPIOA
 #define BTN_OK_EXTI_IRQn EXTI15_10_IRQn
@@ -82,6 +74,7 @@ void Error_Handler(void);
 #define LD3_GPIO_Port GPIOB
 #define BTN_RI_Pin GPIO_PIN_5
 #define BTN_RI_GPIO_Port GPIOB
+#define BTN_RI_EXTI_IRQn EXTI9_5_IRQn
 /* USER CODE BEGIN Private defines */
 
 /* USER CODE END Private defines */
