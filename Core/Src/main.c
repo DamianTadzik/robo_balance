@@ -29,6 +29,7 @@
 #include <string.h>
 #include "i2c-lcd.h"
 #include "mpu6050.h"
+#include "eeprom.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -95,6 +96,21 @@ typedef struct {  // struct for holding PID variables
 #define LCD_LEFT_ARROW 127	// added by Tadzik for LCD
 #define LCD_RIGHT_ARROW 126
 #define LCD_DEGREE_SYMBOL 223
+
+#define DOUBLE_SIZE 0x08
+#define EEP_ADD_ANG_KP 0 * DOUBLE_SIZE
+#define EEP_ADD_ANG_KI 1 * DOUBLE_SIZE
+#define EEP_ADD_ANG_KD 2 * DOUBLE_SIZE
+#define EEP_ADD_ANG_INT 3 * DOUBLE_SIZE
+#define EEP_ADD_POS_KP 4 * DOUBLE_SIZE
+#define EEP_ADD_POS_KI 5 * DOUBLE_SIZE
+#define EEP_ADD_POS_KD 6 * DOUBLE_SIZE
+#define EEP_ADD_POS_INT 7 * DOUBLE_SIZE
+#define EEP_ADD_DIR_KP 8 * DOUBLE_SIZE
+#define EEP_ADD_DIR_KI 9 * DOUBLE_SIZE
+#define EEP_ADD_DIR_KD 10 * DOUBLE_SIZE
+#define EEP_ADD_DIR_INT 11 * DOUBLE_SIZE
+#define EEP_ADD_ANG_TRG 12 * DOUBLE_SIZE
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -128,6 +144,7 @@ const double delta_time = 0.02;			// 20 ms
 const int16_t encd_reset = 255;			// just big enough so value doesnt overflow in negative dir
 
 double old_value = 0;		// for updating screen and shit
+double PWM_returned = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -145,6 +162,9 @@ void stateKI(PID_variables_t *hvar);
 void stateKD(PID_variables_t *hvar);
 void stateINT(PID_variables_t *hvar);
 void stateTRG(PID_variables_t *hvar);
+
+void store_data_in_memory(void);
+void restore_data_from_memory(void);
 
 void lcd_send_arrows_to_sides(void);
 void setMotors(int left_motor_speed, int right_motor_speed, int zero_speed, int offset_zero_speed);
@@ -178,9 +198,13 @@ int main(void)
   angle_PID.id = 1;
   position_PID.id = 2;
   direction_PID.id = 3;
+  angle_PID.delta_time = delta_time;
+  position_PID.delta_time = delta_time;
+  direction_PID.delta_time = delta_time;
   strncpy(angle_PID.name, "angle    \0", 16);
   strncpy(position_PID.name, "position \0", 16);
   strncpy(direction_PID.name, "direction\0", 16);
+//  angle_PID.target_value = 1.0;
 
   BTN.ok = BTN_not_pressed;
   BTN.no = BTN_not_pressed;
@@ -211,7 +235,7 @@ int main(void)
   lcd_init();
   lcd_put_cur(0, 0);
   lcd_send_string("Hello, world!");
-
+  restore_data_from_memory();
   MPU6050_Init(&hi2c1);
   HAL_Delay(1000);
   while (1)
@@ -363,8 +387,6 @@ void stateBALANCE(void)
 		lcd_clear();
 		lcd_put_cur(0, 0);
 		lcd_send_string("Balancing");
-		lcd_put_cur(1, 0);
-		lcd_send_string("press no to exit");
 		HAL_TIM_Encoder_Start(&htim1, TIM_CHANNEL_ALL);	// ENC TIMER1 START
 		HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);	// ENC TIMER2 START
 		HAL_TIM_PWM_Start(&htim15, TIM_CHANNEL_1);	// PWM TIMER15 START
@@ -382,16 +404,21 @@ void stateBALANCE(void)
 		TIM1->CNT = encd_reset;
 
 		MPU6050_Read_All(&hi2c1, &MPU6050);		// MPU READ ANGLE KALMAN
-		double ret = PID(MPU6050.KalmanAngleX, angle_PID.target_value, &angle_PID);	// PID
+		PWM_returned = PID(MPU6050.KalmanAngleX, angle_PID.target_value, &angle_PID);	// PID
 
-		duty_left = constrain((int16_t)ret, -999, 999);		// duty constraining
-		duty_right = constrain((int16_t)ret, -999, 999);	// duty constraining
+		duty_left = constrain((int16_t)PWM_returned, -999, 999);		// duty constraining
+		duty_right = constrain((int16_t)PWM_returned, -999, 999);	// duty constraining
 		setMotors(duty_left, duty_right, 0, 0);
+
+		sprintf(MSG, "%+6.2f, %+6.2f", PWM_returned, angle_PID.integral);
+		lcd_put_cur(1, 0);
+		lcd_send_string(MSG);
 	}
 	if (BTN.ok == BTN_pressed) BTN.ok = BTN_not_pressed;
 	if (BTN.no == BTN_pressed)
 	{
 		BTN.no = BTN_not_pressed;
+		setMotors(0, 0, 0, 0);	// STOP MOTORS
 		HAL_TIM_Base_Stop_IT(&htim7);		// TIMER7 STOP
 		HAL_TIM_PWM_Start(&htim15, TIM_CHANNEL_1);	// PWM TIMER15 STOP
 		HAL_TIM_PWM_Start(&htim15, TIM_CHANNEL_2);	// PWM TIMER15 STOP
@@ -533,17 +560,20 @@ void stateEEPROM(void)
 		previous_state = current_state;
 		lcd_clear();
 		lcd_put_cur(0, 0);
-		lcd_send_string("EEPROM");
+		lcd_send_string("EEPROM ok-store ");
+		lcd_put_cur(1, 2);
+		lcd_send_string("back-restore");
 		lcd_send_arrows_to_sides();
 	}
-	// todo finish this state and its functions
 	if (BTN.ok == BTN_pressed)
 	{
 		BTN.ok = BTN_not_pressed;
+		store_data_in_memory();
 	}
 	if (BTN.no == BTN_pressed)
 	{
 		BTN.no = BTN_not_pressed;
+		restore_data_from_memory();
 	}
 	if (BTN.left == BTN_pressed)
 	{
@@ -647,12 +677,12 @@ void stateKP(PID_variables_t *hvar)
 	if (BTN.ok == BTN_pressed)
 	{
 		BTN.ok = BTN_not_pressed;
-		hvar->kp += 0.1;
+		hvar->kp += 1;
 	}
 	if (BTN.no == BTN_pressed)
 	{
 		BTN.no = BTN_not_pressed;
-		hvar->kp -= 0.1;
+		hvar->kp -= 1;
 	}
 	if (BTN.left == BTN_pressed)
 	{
@@ -685,12 +715,12 @@ void stateKI(PID_variables_t *hvar)
 	if (BTN.ok == BTN_pressed)
 	{
 		BTN.ok = BTN_not_pressed;
-		hvar->ki += 0.1;
+		hvar->ki += 1;
 	}
 	if (BTN.no == BTN_pressed)
 	{
 		BTN.no = BTN_not_pressed;
-		hvar->ki -= 0.1;
+		hvar->ki -= 1;
 	}
 	if (BTN.left == BTN_pressed)
 	{
@@ -723,12 +753,12 @@ void stateKD(PID_variables_t *hvar)
 	if (BTN.ok == BTN_pressed)
 	{
 		BTN.ok = BTN_not_pressed;
-		hvar->kd += 0.1;
+		hvar->kd += 1;
 	}
 	if (BTN.no == BTN_pressed)
 	{
 		BTN.no = BTN_not_pressed;
-		hvar->kd -= 0.1;
+		hvar->kd -= 1;
 	}
 	if (BTN.left == BTN_pressed)
 	{
@@ -754,7 +784,7 @@ void stateINT(PID_variables_t *hvar)
 		old_value = hvar->int_limit;
 
 		lcd_put_cur(0, 0);
-		sprintf(MSG,"int_lim = %+06.2f", hvar->int_limit);
+		sprintf(MSG,"int_lim = %+06.3f", hvar->int_limit);
 		lcd_send_string(MSG);
 	}
 	if (BTN.ok == BTN_pressed)
@@ -816,6 +846,42 @@ void stateTRG(PID_variables_t *hvar)
 	}
 }
 
+void store_data_in_memory(void)
+{
+	eeprom_write(EEP_ADD_ANG_TRG, &angle_PID.target_value, sizeof(double));
+	eeprom_write(EEP_ADD_ANG_KP, &angle_PID.kp, sizeof(double));
+	eeprom_write(EEP_ADD_ANG_KI, &angle_PID.ki, sizeof(double));
+	eeprom_write(EEP_ADD_ANG_KD, &angle_PID.kd, sizeof(double));
+	eeprom_write(EEP_ADD_ANG_INT, &angle_PID.int_limit, sizeof(double));
+
+	eeprom_write(EEP_ADD_POS_KP, &position_PID.kp, sizeof(double));
+	eeprom_write(EEP_ADD_POS_KI, &position_PID.ki, sizeof(double));
+	eeprom_write(EEP_ADD_POS_KD, &position_PID.kd, sizeof(double));
+	eeprom_write(EEP_ADD_POS_INT, &position_PID.int_limit, sizeof(double));
+
+	eeprom_write(EEP_ADD_DIR_KP, &direction_PID.kp, sizeof(double));
+	eeprom_write(EEP_ADD_DIR_KI, &direction_PID.ki, sizeof(double));
+	eeprom_write(EEP_ADD_DIR_KD, &direction_PID.kd, sizeof(double));
+	eeprom_write(EEP_ADD_DIR_INT, &direction_PID.int_limit, sizeof(double));
+}
+void restore_data_from_memory(void)
+{
+	eeprom_read(EEP_ADD_ANG_TRG, &angle_PID.target_value, sizeof(double));
+	eeprom_read(EEP_ADD_ANG_KP, &angle_PID.kp, sizeof(double));
+	eeprom_read(EEP_ADD_ANG_KI, &angle_PID.ki, sizeof(double));
+	eeprom_read(EEP_ADD_ANG_KD, &angle_PID.kd, sizeof(double));
+	eeprom_read(EEP_ADD_ANG_INT, &angle_PID.int_limit, sizeof(double));
+
+	eeprom_read(EEP_ADD_POS_KP, &position_PID.kp, sizeof(double));
+	eeprom_read(EEP_ADD_POS_KI, &position_PID.ki, sizeof(double));
+	eeprom_read(EEP_ADD_POS_KD, &position_PID.kd, sizeof(double));
+	eeprom_read(EEP_ADD_POS_INT, &position_PID.int_limit, sizeof(double));
+
+	eeprom_read(EEP_ADD_DIR_KP, &direction_PID.kp, sizeof(double));
+	eeprom_read(EEP_ADD_DIR_KI, &direction_PID.ki, sizeof(double));
+	eeprom_read(EEP_ADD_DIR_KD, &direction_PID.kd, sizeof(double));
+	eeprom_read(EEP_ADD_DIR_INT, &direction_PID.int_limit, sizeof(double));
+}
 /*
  * Function for displaying both arrows on LCD xd
  */
@@ -922,7 +988,8 @@ double PID(double current_value, double target_value, PID_variables_t *hvar)
 	hvar->integral = constrain(hvar->integral, -hvar->int_limit, hvar->int_limit);	// Anti windup
 	hvar->derivative = (hvar->error - hvar->previous_error) / hvar->delta_time;	// derivative
 	hvar->previous_error = hvar->error;		// save last error for further calculation
-	return (hvar->ki * hvar->error) + (hvar->ki * hvar->integral) + (hvar->kd * hvar->derivative);
+	double ret = (hvar->kp * hvar->error) + (hvar->ki * hvar->integral) + (hvar->kd * hvar->derivative);
+	return ret;
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
@@ -942,17 +1009,17 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	if (GPIO_Pin == BTN_NO_Pin)
 	{
 		BTN.no = BTN_pressed;
-		HAL_Delay(5); // XDDDD INTERRUPTS ALE CALLED TWICE WITHOUT THIS DUDE RIGHT HERE XD FIXME
+		HAL_Delay(5); // XDDDD INTERRUPTS ALE CALLED TWICE WITHOUT THIS DUDE RIGHT HERE XD
 	}
 	if (GPIO_Pin == BTN_LE_Pin)
 	{
 		BTN.left = BTN_pressed;
-		HAL_Delay(5); // XDDDD INTERRUPTS ALE CALLED TWICE WITHOUT THIS DUDE RIGHT HERE XD FIXME
+		HAL_Delay(5); // XDDDD INTERRUPTS ALE CALLED TWICE WITHOUT THIS DUDE RIGHT HERE XD
 	}
 	if (GPIO_Pin == BTN_RI_Pin)
 	{
 		BTN.right = BTN_pressed;
-		HAL_Delay(5); // XDDDD INTERRUPTS ALE CALLED TWICE WITHOUT THIS DUDE RIGHT HERE XD FIXME
+		HAL_Delay(5); // XDDDD INTERRUPTS ALE CALLED TWICE WITHOUT THIS DUDE RIGHT HERE XD
 	}
 }
 /* USER CODE END 4 */
