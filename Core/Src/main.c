@@ -28,8 +28,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "i2c-lcd.h"
+#include "i2c-eeprom.h"
+#include "i2c-logger.h"
 #include "mpu6050.h"
-#include "eeprom.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -84,11 +85,9 @@ typedef struct {  // struct for holding PID variables
 	double kp;			// set in eeprom
 	double ki;			// set in eeprom
 	double kd;			// set in eeprom
-	double delta_time;	// set in code
 	char name[16 + 1];		// set in code
 	uint8_t id;				// set in code
 } PID_variables_t;
-
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -139,12 +138,14 @@ int16_t old_encd_left = 0, encd_left = 0, sum_encd_left = 0;
 int16_t old_encd_right = 0, encd_right = 0, sum_encd_right = 0;
 int16_t duty_left = 0, duty_right = 0;
 
-const double pi10_over_24 = 0.654498;	// this * encoder ticks per 10 ms results in rad/s // FIXME check if true
+const double pi10_over_24 = 0.654498;	// this times encoder ticks per 10 ms results in rad/s // FIXME check if true
 const double delta_time = 0.02;			// 20 ms
 const int16_t encd_reset = 255;			// just big enough so value doesnt overflow in negative dir
 
 double old_value = 0;		// for updating screen and shit
 double PWM_returned = 0;
+
+double * log_values[7];		// for holding pointers to values meant to log
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -198,9 +199,6 @@ int main(void)
   angle_PID.id = 1;
   position_PID.id = 2;
   direction_PID.id = 3;
-  angle_PID.delta_time = delta_time;
-  position_PID.delta_time = delta_time;
-  direction_PID.delta_time = delta_time;
   strncpy(angle_PID.name, "angle    \0", 16);
   strncpy(position_PID.name, "position \0", 16);
   strncpy(direction_PID.name, "direction\0", 16);
@@ -398,19 +396,19 @@ void stateBALANCE(void)
 	{
 		tim7_20ms_flag = TIM_no_interrupt; 		// TIMER7 FLAG ERASE
 
-		encd_left = (TIM2->CNT) - encd_reset;	// encoders read step diff
+		encd_left = (TIM2->CNT) - encd_reset;	// encoders read velocity
 		encd_right = (TIM1->CNT) - encd_reset;
 		TIM2->CNT = encd_reset;
 		TIM1->CNT = encd_reset;
 
-		MPU6050_Read_All(&hi2c1, &MPU6050);		// MPU READ ANGLE KALMAN
-		PWM_returned = PID(MPU6050.KalmanAngleX, angle_PID.target_value, &angle_PID);	// PID
+		MPU6050_Read_All(&hi2c1, &MPU6050);		// MPU READ ANGLE KALMAN		// moze komplementarny dac
+		PWM_returned = PID(MPU6050.KalmanAngleX, angle_PID.target_value, &angle_PID);	// PID calc
 
 		duty_left = constrain((int16_t)PWM_returned, -999, 999);		// duty constraining
 		duty_right = constrain((int16_t)PWM_returned, -999, 999);	// duty constraining
 		setMotors(duty_left, duty_right, 0, 0);
 
-		sprintf(MSG, "%+6.2f, %+6.2f", PWM_returned, angle_PID.integral);
+		sprintf(MSG, "%+04d, %+04d", duty_left, duty_right);
 		lcd_put_cur(1, 0);
 		lcd_send_string(MSG);
 	}
@@ -457,15 +455,12 @@ void stateENCODER(void)
 		TIM2->CNT = encd_reset;
 		TIM1->CNT = encd_reset;
 
-		if (encd_left != old_encd_left || encd_right != old_encd_right)
+		if (encd_left != old_encd_left || encd_right != old_encd_right)	// print if change in encoder speed occured
 		{
 			old_encd_left = encd_left;
 			old_encd_right = encd_right;
 			lcd_put_cur(0, 8);
-			sprintf(MSG, "%+03d", encd_left);
-			lcd_send_string(MSG);
-			lcd_put_cur(0, 12);
-			sprintf(MSG, "%+03d", encd_right);
+			sprintf(MSG, "%+03d %+03d", encd_left, encd_right);
 			lcd_send_string(MSG);
 		}
 
@@ -474,25 +469,19 @@ void stateENCODER(void)
 	if (BTN.ok == BTN_pressed)
 	{
 		BTN.ok = BTN_not_pressed;
-		duty_left = constrain(duty_left + 333, -999, 999);
-		duty_right = constrain(duty_right + 333, -999, 999);
+		duty_left = constrain(duty_left + 111, -999, 999);
+		duty_right = constrain(duty_right + 111, -999, 999);
 		lcd_put_cur(1, 2);
-		sprintf(MSG, "%+04d", duty_left);
-		lcd_send_string(MSG);
-		lcd_put_cur(1, 8);
-		sprintf(MSG, "%+04d", duty_right);
+		sprintf(MSG, "%+04d  %+04d", duty_left, duty_right);
 		lcd_send_string(MSG);
 	}
 	if (BTN.no == BTN_pressed)
 	{
 		BTN.no = BTN_not_pressed;
-		duty_left = constrain(duty_left - 333, -999, 999);
-		duty_right = constrain(duty_right - 333, -999, 999);
+		duty_left = constrain(duty_left - 111, -999, 999);
+		duty_right = constrain(duty_right - 111, -999, 999);
 		lcd_put_cur(1, 2);
-		sprintf(MSG, "%+04d", duty_left);
-		lcd_send_string(MSG);
-		lcd_put_cur(1, 8);
-		sprintf(MSG, "%+04d", duty_right);
+		sprintf(MSG, "%+04d  %+04d", duty_left, duty_right);
 		lcd_send_string(MSG);
 	}
 	if (BTN.left == BTN_pressed)
@@ -502,6 +491,7 @@ void stateENCODER(void)
 	if (BTN.right == BTN_pressed)
 	{
 		BTN.right = BTN_not_pressed;
+		setMotors(0, 0, 0, 0);
 		HAL_TIM_Base_Stop_IT(&htim7);		// TIMER7 STOP
 		HAL_TIM_PWM_Stop(&htim15, TIM_CHANNEL_1);	// PWM TIMER15 STOP
 		HAL_TIM_PWM_Stop(&htim15, TIM_CHANNEL_2);	// PWM TIMER15 STOP
@@ -608,10 +598,7 @@ void stateHOME(void)
 		BTN.ok = BTN_not_pressed;
 		current_state = BALANCE_state;
 	}
-	if (BTN.no == BTN_pressed)
-	{
-		BTN.no = BTN_not_pressed;
-	}
+	if (BTN.no == BTN_pressed) BTN.no = BTN_not_pressed;
 	if (BTN.left == BTN_pressed)
 	{
 		BTN.left = BTN_not_pressed;
@@ -677,12 +664,12 @@ void stateKP(PID_variables_t *hvar)
 	if (BTN.ok == BTN_pressed)
 	{
 		BTN.ok = BTN_not_pressed;
-		hvar->kp += 1;
+		hvar->kp += 2.5;
 	}
 	if (BTN.no == BTN_pressed)
 	{
 		BTN.no = BTN_not_pressed;
-		hvar->kp -= 1;
+		hvar->kp -= 2.5;
 	}
 	if (BTN.left == BTN_pressed)
 	{
@@ -715,12 +702,12 @@ void stateKI(PID_variables_t *hvar)
 	if (BTN.ok == BTN_pressed)
 	{
 		BTN.ok = BTN_not_pressed;
-		hvar->ki += 1;
+		hvar->ki += 0.25;
 	}
 	if (BTN.no == BTN_pressed)
 	{
 		BTN.no = BTN_not_pressed;
-		hvar->ki -= 1;
+		hvar->ki -= 0.25;
 	}
 	if (BTN.left == BTN_pressed)
 	{
@@ -753,12 +740,12 @@ void stateKD(PID_variables_t *hvar)
 	if (BTN.ok == BTN_pressed)
 	{
 		BTN.ok = BTN_not_pressed;
-		hvar->kd += 1;
+		hvar->kd += 25;
 	}
 	if (BTN.no == BTN_pressed)
 	{
 		BTN.no = BTN_not_pressed;
-		hvar->kd -= 1;
+		hvar->kd -= 25;
 	}
 	if (BTN.left == BTN_pressed)
 	{
@@ -790,12 +777,12 @@ void stateINT(PID_variables_t *hvar)
 	if (BTN.ok == BTN_pressed)
 	{
 		BTN.ok = BTN_not_pressed;
-		hvar->int_limit += 0.1;
+		hvar->int_limit += 0.25;
 	}
 	if (BTN.no == BTN_pressed)
 	{
 		BTN.no = BTN_not_pressed;
-		hvar->int_limit -= 0.1;
+		hvar->int_limit -= 0.25;
 	}
 	if (BTN.left == BTN_pressed)
 	{
@@ -828,12 +815,12 @@ void stateTRG(PID_variables_t *hvar)
 	if (BTN.ok == BTN_pressed)
 	{
 		BTN.ok = BTN_not_pressed;
-		hvar->target_value += 0.1;
+		hvar->target_value += 0.05;
 	}
 	if (BTN.no == BTN_pressed)
 	{
 		BTN.no = BTN_not_pressed;
-		hvar->target_value -= 0.1;
+		hvar->target_value -= 0.05;
 	}
 	if (BTN.left == BTN_pressed)
 	{
@@ -984,12 +971,12 @@ double constrain(double x, double lower_bound, double upper_bound)
 double PID(double current_value, double target_value, PID_variables_t *hvar)
 {
 	hvar->error = (target_value - current_value);	// error calc
-	hvar->integral = hvar->integral + hvar->error * hvar->delta_time; 	// Euler quadrature integral
+	hvar->integral = hvar->integral + hvar->error; 	// Euler quadrature integral
+	if (abs(hvar->error) < 0.01) hvar->integral = 0;		// experiment xD
 	hvar->integral = constrain(hvar->integral, -hvar->int_limit, hvar->int_limit);	// Anti windup
-	hvar->derivative = (hvar->error - hvar->previous_error) / hvar->delta_time;	// derivative
+	hvar->derivative = (hvar->previous_error - hvar->error);	// derivative
 	hvar->previous_error = hvar->error;		// save last error for further calculation
-	double ret = (hvar->kp * hvar->error) + (hvar->ki * hvar->integral) + (hvar->kd * hvar->derivative);
-	return ret;
+	return (hvar->kp * hvar->error) + (hvar->ki * hvar->integral) + (hvar->kd * hvar->derivative);
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)

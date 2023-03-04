@@ -1,4 +1,4 @@
-#include "eeprom.h"
+#include "i2c-eeprom.h"
 #include "i2c.h"
 
 #define EEPROM_ADDR     0xA0
